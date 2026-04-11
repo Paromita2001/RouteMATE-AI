@@ -1,0 +1,58 @@
+
+============================================================
+2. TRAIN LIST (Train_List.csv)
+============================================================
+  Raw shape: (42, 5)
+  Duplicate train numbers: 0
+  Train type distribution:
+train_type
+Superfast       19
+Mail/Express    16
+Rajdhani         4
+Humsafar         2
+Tejas            1
+  Clean shape: (42, 6)
+  ✓ Saved → data/processed/train_list_clean.csv
+
+============================================================
+3. SCHEDULES (schedules.csv)
+============================================================
+  Raw shape: (3292, 13)
+  Nulls after clean:
+  None
+  Clean shape: (3292, 15)
+  ✓ Saved → data/processed/schedules_clean.csv
+
+============================================================
+4. TRAIN ROUTES (EXP / PASS / SF JSON files)
+============================================================
+  Express trains :  2533 trains,   64899 stops
+  Passenger trains: 4545 trains,   76796 stops
+  Superfast trains: 1412 trains,   28645 stops
+  Combined total  : 8490 trains,  170340 stops
+  Nulls (NaN expected for Source/Dest times):
+arrives_min     8490
+departs_min     8490
+halt_min       16980
+  ✓ Saved → data/processed/train_routes_clean.csv
+
+============================================================
+5. MASTER MERGED TABLE
+============================================================
+  Master table shape: (1002, 14)
+  Columns: ['train_number', 'train_name', 'from_station', 'to_station', 'train_type', 'train_number_str', 'total_stops', 'total_distance', 'running_days', 'train_category', 'num_stations', 'timestamp', 'origin_avg_delay_min', 'origin_delay_category']
+  Nulls:
+total_stops       272
+total_distance    272
+running_days      272
+train_category    272
+  ✓ Saved → data/processed/master_merged.csv
+
+============================================================
+SUMMARY
+============================================================
+  merged_delay.csv      → 1354 rows × 8 cols
+  train_list_clean.csv → 42 rows × 6 cols
+  schedules_clean.csv  → 3292 rows × 15 cols
+  train_routes_clean.csv → 170340 rows × 16 cols
+  master_merged.csv    → 1002 rows × 14 cols
