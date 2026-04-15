@@ -280,9 +280,9 @@ class RouteMapVisualizer:
     def _base_map(self, center=None, zoom=None) -> "folium.Map":
         """Create a base Folium map."""
         return folium.Map(
-            location  = center or INDIA_CENTER,
-            zoom_start= zoom   or INDIA_ZOOM,
-            tiles     = self.tile_style,
+            location=center or INDIA_CENTER,
+            zoom_start=zoom or INDIA_ZOOM,
+            tiles="CartoDB positron",   # 🔥 CLEAN WHITE MAP
             prefer_canvas=True,
         )
 

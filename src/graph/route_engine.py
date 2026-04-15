@@ -145,6 +145,42 @@ class RouteGraph:
                 )
                 edge_count += 1
 
+
+
+
+
+
+        # 🔥 ADD THIS BLOCK HERE
+        print("📇 Building train stop index...")
+
+        df_sorted = df.sort_values(["train_number", "stop_no"])
+        self._train_stops = {}
+
+        for train_num, train_df in df_sorted.groupby("train_number"):
+            stops = train_df.reset_index(drop=True)
+
+            self._train_stops[train_num] = [
+                {
+                    "station": row.station_code,
+                    "departs_min": row.departs_min,
+                    "arrives_min": row.arrives_min,
+                    "distance_km": row.distance_km,
+                    "day": row.day,
+                    "train_name": row.train_name,
+                    "train_category": row.train_category,
+                    "running_days": row.running_days,
+                    "departs": row.departs,
+                    "arrives": row.arrives,
+                }
+                for row in stops.itertuples()
+            ]
+
+
+
+
+
+
+
         self._built = True
         print(f"✅ Graph built: {self.G.number_of_nodes():,} nodes | "
               f"{self.G.number_of_edges():,} edges | {edge_count:,} train connections")
@@ -230,101 +266,175 @@ class RouteGraph:
 
         results = []
 
-        # Collect all trains passing through origin
-        trains_at_origin = set()
-        for _, dst, edata in self.G.out_edges(origin, data=True):
-            trains_at_origin.add(edata["train_number"])
 
-        # For each such train, check if destination is a later stop
-        for train_num in trains_at_origin:
-            # Get all edges for this train
-            train_edges = [
-                (u, v, d) for u, v, d in self.G.edges(data=True)
-                if d.get("train_number") == train_num
-            ]
-            if not train_edges:
+
+
+
+
+
+        
+
+        # 🔥 NEW LOGIC USING TRAIN STOPS
+        for train_num, stops in self._train_stops.items():
+
+            # map station → index
+            station_to_idx = {}
+            for i, s in enumerate(stops):
+                if s["station"] not in station_to_idx:
+                    station_to_idx[s["station"]] = i
+
+            # skip if train doesn't cover both stations
+            if origin not in station_to_idx or destination not in station_to_idx:
                 continue
 
-            # Build ordered stop sequence
-            stop_order = {}
-            for u, v, d in train_edges:
-                if u not in stop_order:
-                    stop_order[u] = d.get("depart_min", np.nan)
+            o_idx = station_to_idx[origin]
+            d_idx = station_to_idx[destination]
 
-            # Check if destination appears after origin in this train's path
-            origin_dep  = stop_order.get(origin, np.nan)
-            dest_arr    = None
+            # ensure correct direction
+            if d_idx <= o_idx:
+                continue
 
-            # Find the edge that arrives at destination on this train
-            for u, v, d in train_edges:
-                if v == destination:
-                    dest_arr = d.get("arrive_min", np.nan)
-                    break
+            o_stop = stops[o_idx]
+            d_stop = stops[d_idx]
 
-            if dest_arr is None:
-                continue  # destination not on this train
+            # ✅ correct distance
+            total_dist = max(d_stop["distance_km"] - o_stop["distance_km"], 0)
 
-            # Compute total travel time
-            if pd.notna(origin_dep) and pd.notna(dest_arr):
-                total_min = dest_arr - origin_dep
+            # ✅ correct time
+            dep = o_stop["departs_min"]
+            arr = d_stop["arrives_min"]
+
+            if pd.notna(dep) and pd.notna(arr):
+                total_min = arr - dep
                 if total_min < 0:
                     total_min += 1440
             else:
                 total_min = np.nan
 
-            # Get total distance
-            # dist_edges = [d for u, v, d in train_edges]
-            # total_dist = sum(d.get("distance_km", 0) for d in dist_edges)
-            
-            total_dist = 0
-            start_collecting = False
-
-            for u, v, d in train_edges:
-                if u == origin:
-                    start_collecting = True
-
-                if start_collecting:
-                    total_dist += d.get("distance_km", 0)
-
-                if v == destination:
-                    break
-
-            meta = train_edges[0][2]  # first edge for metadata
-
-            # Delay risk at origin
             delay_info = self.get_station_delay_info(origin)
 
             results.append({
-                "route_type"     : "Direct",
-                "changes"        : 0,
-                "train_number"   : train_num,
-                "train_name"     : meta.get("train_name"),
-                "train_category" : meta.get("train_category"),
-                "running_days"   : meta.get("running_days"),
-                "origin"         : origin,
-                "origin_name"    : self.get_station_name(origin),
-                "destination"    : destination,
+                "route_type": "Direct",
+                "changes": 0,
+                "train_number": train_num,
+                "train_name": o_stop["train_name"],
+                "train_category": o_stop["train_category"],
+                "running_days": o_stop["running_days"],
+                "origin": origin,
+                "origin_name": self.get_station_name(origin),
+                "destination": destination,
                 "destination_name": self.get_station_name(destination),
-                "total_travel_min"   : total_min,
-                "total_travel_hrs"   : round(total_min / 60, 2) if pd.notna(total_min) else None,
-                "origin_delay_min"   : delay_info["avg_delay_min"],
-                "origin_risk"        : delay_info["risk_label"],
-                "legs"           : [{
-                    "leg"          : 1,
-                    "from"         : origin,
-                    "from_name"    : self.get_station_name(origin),
-                    "to"           : destination,
-                    "to_name"      : self.get_station_name(destination),
-                    "train_number" : train_num,
-                    "train_name"   : meta.get("train_name"),
-                    "train_category": meta.get("train_category"),
-                    "running_days" : meta.get("running_days"),
-                    "depart_time"  : None,
-                    "arrive_time"  : None,
-                    "travel_min"   : total_min,
-                    "distance_km"  : total_dist,
+                "total_travel_min": total_min,
+                "total_travel_hrs": round(total_min / 60, 2) if pd.notna(total_min) else None,
+                "total_distance_km": total_dist,
+                "origin_delay_min": delay_info["avg_delay_min"],
+                "origin_risk": delay_info["risk_label"],
+                "legs": [{
+                    "leg": 1,
+                    "from": origin,
+                    "to": destination,
+                    "train_number": train_num,
+                    "train_name": o_stop["train_name"],
+                    "travel_min": total_min,
+                    "distance_km": total_dist,
                 }],
             })
+
+        # # Collect all trains passing through origin
+        # trains_at_origin = set()
+        # for _, dst, edata in self.G.out_edges(origin, data=True):
+        #     trains_at_origin.add(edata["train_number"])
+
+        # # For each such train, check if destination is a later stop
+        # for train_num in trains_at_origin:
+        #     # Get all edges for this train
+        #     # train_edges = [
+        #     #     (u, v, d) for u, v, d in self.G.edges(data=True)
+        #     #     if d.get("train_number") == train_num
+        #     # ]
+            # if not train_edges:
+            #     continue
+
+            # # Build ordered stop sequence
+            # stop_order = {}
+            # for u, v, d in train_edges:
+            #     if u not in stop_order:
+            #         stop_order[u] = d.get("depart_min", np.nan)
+
+            # # Check if destination appears after origin in this train's path
+            # origin_dep  = stop_order.get(origin, np.nan)
+            # dest_arr    = None
+
+            # # Find the edge that arrives at destination on this train
+            # for u, v, d in train_edges:
+            #     if v == destination:
+            #         dest_arr = d.get("arrive_min", np.nan)
+            #         break
+
+            # if dest_arr is None:
+            #     continue  # destination not on this train
+
+            # # Compute total travel time
+            # if pd.notna(origin_dep) and pd.notna(dest_arr):
+            #     total_min = dest_arr - origin_dep
+            #     if total_min < 0:
+            #         total_min += 1440
+            # else:
+            #     total_min = np.nan
+
+            # # Get total distance
+            # # dist_edges = [d for u, v, d in train_edges]
+            # # total_dist = sum(d.get("distance_km", 0) for d in dist_edges)
+            
+            # total_dist = 0
+            # start_collecting = False
+
+            # for u, v, d in train_edges:
+            #     if u == origin:
+            #         start_collecting = True
+
+            #     if start_collecting:
+            #         total_dist += d.get("distance_km", 0)
+
+            #     if v == destination:
+            #         break
+
+            # meta = train_edges[0][2]  # first edge for metadata
+
+            # # Delay risk at origin
+            # delay_info = self.get_station_delay_info(origin)
+
+            # results.append({
+            #     "route_type"     : "Direct",
+            #     "changes"        : 0,
+            #     "train_number"   : train_num,
+            #     "train_name"     : meta.get("train_name"),
+            #     "train_category" : meta.get("train_category"),
+            #     "running_days"   : meta.get("running_days"),
+            #     "origin"         : origin,
+            #     "origin_name"    : self.get_station_name(origin),
+            #     "destination"    : destination,
+            #     "destination_name": self.get_station_name(destination),
+            #     "total_travel_min"   : total_min,
+            #     "total_travel_hrs"   : round(total_min / 60, 2) if pd.notna(total_min) else None,
+            #     "origin_delay_min"   : delay_info["avg_delay_min"],
+            #     "origin_risk"        : delay_info["risk_label"],
+            #     "legs"           : [{
+            #         "leg"          : 1,
+            #         "from"         : origin,
+            #         "from_name"    : self.get_station_name(origin),
+            #         "to"           : destination,
+            #         "to_name"      : self.get_station_name(destination),
+            #         "train_number" : train_num,
+            #         "train_name"   : meta.get("train_name"),
+            #         "train_category": meta.get("train_category"),
+            #         "running_days" : meta.get("running_days"),
+            #         "depart_time"  : None,
+            #         "arrive_time"  : None,
+            #         "travel_min"   : total_min,
+            #         "distance_km"  : total_dist,
+            #     }],
+            # })
 
         # Sort by travel time
         results.sort(key=lambda x: x["total_travel_min"] if pd.notna(x.get("total_travel_min")) else 9999)
@@ -385,141 +495,159 @@ class RouteGraph:
         #         distance_km=data.get("distance_km", 0),
         #     )
 
-        simple_G = nx.DiGraph()
+        # simple_G = nx.DiGraph()
 
-        for u, v, data in self.G.edges(data=True):
-            t = data.get("travel_min", np.nan)
+        # for u, v, data in self.G.edges(data=True):
+        #     t = data.get("travel_min", np.nan)
 
-            if pd.isna(t):
-                t = data.get("distance_km", 60)
+        #     if pd.isna(t):
+        #         t = data.get("distance_km", 60)
 
-            if simple_G.has_edge(u, v):
-                if t < simple_G[u][v]["weight"]:
-                    simple_G[u][v].update({
-                        "weight": t,
-                        "train_number": data["train_number"],
-                        "train_name": data["train_name"],
-                        "train_category": data["train_category"],
-                        "running_days": data["running_days"],
-                        "depart_time": data.get("depart_time"),
-                        "arrive_time": data.get("arrive_time"),
-                        "distance_km": data.get("distance_km", 0),
-                    })
-            else:
-                simple_G.add_edge(
-                    u, v,
-                    weight=t,
-                    train_number=data["train_number"],
-                    train_name=data["train_name"],
-                    train_category=data["train_category"],
-                    running_days=data["running_days"],
-                    depart_time=data.get("depart_time"),
-                    arrive_time=data.get("arrive_time"),
-                    distance_km=data.get("distance_km", 0),
-                )
+        #     if simple_G.has_edge(u, v):
+        #         if t < simple_G[u][v]["weight"]:
+        #             simple_G[u][v].update({
+        #                 "weight": t,
+        #                 "train_number": data["train_number"],
+        #                 "train_name": data["train_name"],
+        #                 "train_category": data["train_category"],
+        #                 "running_days": data["running_days"],
+        #                 "depart_time": data.get("depart_time"),
+        #                 "arrive_time": data.get("arrive_time"),
+        #                 "distance_km": data.get("distance_km", 0),
+        #             })
+        #     else:
+        #         simple_G.add_edge(
+        #             u, v,
+        #             weight=t,
+        #             train_number=data["train_number"],
+        #             train_name=data["train_name"],
+        #             train_category=data["train_category"],
+        #             running_days=data["running_days"],
+        #             depart_time=data.get("depart_time"),
+        #             arrive_time=data.get("arrive_time"),
+        #             distance_km=data.get("distance_km", 0),
+        #         )
 
 
-        if origin not in simple_G or destination not in simple_G:
-            return direct_top
+        # if origin not in simple_G or destination not in simple_G:
+        #     return direct_top
 
-        # Find shortest paths (limit to avoid explosion)
-        results = list(direct_top)
+        # # Find shortest paths (limit to avoid explosion)
+        # results = list(direct_top)
 
-        try:
-            paths = islice(
-                nx.shortest_simple_paths(simple_G, origin, destination, weight="weight"),
-                top_n * 10
-            )
+        # try:
+            # paths = islice(
+            #     nx.shortest_simple_paths(simple_G, origin, destination, weight="weight"),
+            #     top_n * 10
+            # )
 
-            for path in paths:
+            # for path in paths:
                 
-                if path[-1] != destination:
-                    continue
-                if len(results) >= top_n:
-                    break
+            #     if path[-1] != destination:
+            #         continue
+            #     if len(results) >= top_n:
+            #         break
 
-                changes = 0
-                legs    = []
-                total_min  = 0
-                total_dist = 0
-                prev_train = None
-                valid      = True
+            #     changes = 0
+            #     legs    = []
+            #     total_min  = 0
+            #     total_dist = 0
+            #     prev_train = None
+            #     valid      = True
 
-                for i in range(len(path) - 1):
-                    u, v  = path[i], path[i + 1]
-                    if not simple_G.has_edge(u, v):
-                        valid = False
-                        break
-                    edata = simple_G[u][v]
-                    t = edata["weight"]
-                    total_min  += t
-                    total_dist += edata.get("distance_km", 0)
+        #         for i in range(len(path) - 1):
+        #             u, v  = path[i], path[i + 1]
+        #             if not simple_G.has_edge(u, v):
+        #                 valid = False
+        #                 break
+        #             edata = simple_G[u][v]
+        #             t = edata["weight"]
+        #             total_min  += t
+        #             total_dist += edata.get("distance_km", 0)
 
-                    if prev_train and edata["train_number"] != prev_train:
-                        changes += 1
+        #             if prev_train and edata["train_number"] != prev_train:
+        #                 changes += 1
 
-                    if changes > max_changes +1:
-                        valid = False
-                        break
+        #             if changes > max_changes +1:
+        #                 valid = False
+        #                 break
 
-                    legs.append({
-                        "leg"          : i + 1,
-                        "from"         : u,
-                        "from_name"    : self.get_station_name(u),
-                        "to"           : v,
-                        "to_name"      : self.get_station_name(v),
-                        "train_number" : edata["train_number"],
-                        "train_name"   : edata["train_name"],
-                        "train_category": edata["train_category"],
-                        "running_days" : edata["running_days"],
-                        "depart_time"  : edata.get("depart_time"),
-                        "arrive_time"  : edata.get("arrive_time"),
-                        "travel_min"   : t,
-                        "distance_km"  : edata.get("distance_km", 0),
-                    })
-                    prev_train = edata["train_number"]
+        #             legs.append({
+        #                 "leg"          : i + 1,
+        #                 "from"         : u,
+        #                 "from_name"    : self.get_station_name(u),
+        #                 "to"           : v,
+        #                 "to_name"      : self.get_station_name(v),
+        #                 "train_number" : edata["train_number"],
+        #                 "train_name"   : edata["train_name"],
+        #                 "train_category": edata["train_category"],
+        #                 "running_days" : edata["running_days"],
+        #                 "depart_time"  : edata.get("depart_time"),
+        #                 "arrive_time"  : edata.get("arrive_time"),
+        #                 "travel_min"   : t,
+        #                 "distance_km"  : edata.get("distance_km", 0),
+        #             })
+        #             prev_train = edata["train_number"]
 
-                if not legs:
-                    continue
+        #         if not legs:
+        #             continue
 
-                # Skip if already captured as direct
-                first_train = legs[0]["train_number"]
-                if changes == 0 and any(
-                    r.get("train_number") == first_train and r["changes"] == 0
-                    for r in results
-                ):
-                    continue
+        #         # Skip if already captured as direct
+        #         first_train = legs[0]["train_number"]
+        #         if changes == 0 and any(
+        #             r.get("train_number") == first_train and r["changes"] == 0
+        #             for r in results
+        #         ):
+        #             continue
 
-                delay_info = self.get_station_delay_info(origin)
+        #         delay_info = self.get_station_delay_info(origin)
 
-                results.append({
-                    "route_type"         : "Direct" if changes == 0 else f"{changes}-Change",
-                    "changes"            : changes,
-                    "origin"             : origin,
-                    "origin_name"        : self.get_station_name(origin),
-                    "destination"        : destination,
-                    "destination_name"   : self.get_station_name(destination),
-                    "total_travel_min"   : round(total_min, 1),
-                    "total_travel_hrs"   : round(total_min / 60, 2),
-                    "total_distance_km"  : round(total_dist, 1),
-                    "origin_delay_min"   : delay_info["avg_delay_min"],
-                    "origin_risk"        : delay_info["risk_label"],
-                    "legs"               : legs,
-                    "train_number"       : legs[0]["train_number"] if changes == 0 else None,
-                    "train_name"         : legs[0]["train_name"]   if changes == 0 else "Multi-train",
-                    "train_category"     : legs[0]["train_category"] if changes == 0 else "Mixed",
-                    "running_days"       : legs[0]["running_days"]  if changes == 0 else "Varies",
-                })
+        #         results.append({
+        #             "route_type"         : "Direct" if changes == 0 else f"{changes}-Change",
+        #             "changes"            : changes,
+        #             "origin"             : origin,
+        #             "origin_name"        : self.get_station_name(origin),
+        #             "destination"        : destination,
+        #             "destination_name"   : self.get_station_name(destination),
+        #             "total_travel_min"   : round(total_min, 1),
+        #             "total_travel_hrs"   : round(total_min / 60, 2),
+        #             "total_distance_km"  : round(total_dist, 1),
+        #             "origin_delay_min"   : delay_info["avg_delay_min"],
+        #             "origin_risk"        : delay_info["risk_label"],
+        #             "legs"               : legs,
+        #             "train_number"       : legs[0]["train_number"] if changes == 0 else None,
+        #             "train_name"         : legs[0]["train_name"]   if changes == 0 else "Multi-train",
+        #             "train_category"     : legs[0]["train_category"] if changes == 0 else "Mixed",
+        #             "running_days"       : legs[0]["running_days"]  if changes == 0 else "Varies",
+        #         })
 
-        except nx.NetworkXNoPath:
-            pass
-        except Exception as e:
-            print(f"⚠️  Path search error: {e}")
+        # except nx.NetworkXNoPath:
+        #     pass
+        # except Exception as e:
+        #     print(f"⚠️  Path search error: {e}")
+
+        
 
 
+
+
+
+        # 🔥 ADD THIS
+        direct = self.find_direct_routes(origin, destination)
+
+        if direct and "error" not in direct[0]:
+            results = direct
+        else:
+            results = []
+
+
+        # Final sort
+        results.sort(key=lambda x: (x["changes"], x.get("total_travel_min") or 9999))
+
+        return results[:top_n]
 
         # Final sort: fewer changes first, then by travel time
-        results.sort(key=lambda x: (x["changes"], x.get("total_travel_min") or 9999))
+        # results.sort(key=lambda x: (x["changes"], x.get("total_travel_min") or 9999))
 
         # ✅ REMOVE DUPLICATE ROUTES
         unique = []
